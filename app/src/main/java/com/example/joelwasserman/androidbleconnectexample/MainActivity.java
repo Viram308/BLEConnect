@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.le.BluetoothLeScanner;
@@ -19,13 +20,15 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Handler;
-import android.support.v7.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatActivity;
 import android.os.Bundle;
 import android.text.method.ScrollingMovementMethod;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.google.android.gms.appindexing.Action;
 import com.google.android.gms.appindexing.AppIndex;
@@ -35,9 +38,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 public class MainActivity extends AppCompatActivity {
 
+    private static final String TAG = "MainActivity";
     BluetoothManager btManager;
     BluetoothAdapter btAdapter;
     BluetoothLeScanner btScanner;
@@ -54,7 +59,6 @@ public class MainActivity extends AppCompatActivity {
     Button connectToDevice;
     Button disconnectDevice;
     BluetoothGatt bluetoothGatt;
-
     public final static String ACTION_GATT_CONNECTED =
             "com.example.bluetooth.le.ACTION_GATT_CONNECTED";
     public final static String ACTION_GATT_DISCONNECTED =
@@ -148,7 +152,7 @@ public class MainActivity extends AppCompatActivity {
     private ScanCallback leScanCallback = new ScanCallback() {
         @Override
         public void onScanResult(int callbackType, ScanResult result) {
-            peripheralTextView.append("Index: " + deviceIndex + ", Device Name: " + result.getDevice().getName() + " rssi: " + result.getRssi() + "\n");
+            peripheralTextView.append("Index: " + deviceIndex + ", Device Name: " + result.getDevice().getName() + " rssi: " + result.getRssi() + "Mac "+result.getDevice().getAddress()+"\n");
             devicesDiscovered.add(result.getDevice());
             deviceIndex++;
             // auto scroll for text view
@@ -171,8 +175,8 @@ public class MainActivity extends AppCompatActivity {
                     peripheralTextView.append("device read or wrote to\n");
                 }
             });
+            broadcastUpdate(characteristic);
         }
-
         @Override
         public void onConnectionStateChange(final BluetoothGatt gatt, final int status, final int newState) {
             // this will get called when a device connects or disconnects
@@ -219,6 +223,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
             displayGattServices(bluetoothGatt.getServices());
+
         }
 
         @Override
@@ -226,16 +231,52 @@ public class MainActivity extends AppCompatActivity {
         public void onCharacteristicRead(BluetoothGatt gatt,
                                          BluetoothGattCharacteristic characteristic,
                                          int status) {
+            Toast.makeText(getApplicationContext(),"Heyy",Toast.LENGTH_SHORT).show();
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                broadcastUpdate(ACTION_DATA_AVAILABLE, characteristic);
+                broadcastUpdate(characteristic);
             }
+
+
         }
     };
 
-    private void broadcastUpdate(final String action,
+    private void broadcastUpdate(
                                  final BluetoothGattCharacteristic characteristic) {
+//        final Intent intent = new Intent(action);
 
-        System.out.println(characteristic.getUuid());
+        // This is special handling for the Heart Rate Measurement profile.  Data parsing is
+        // carried out as per profile specifications:
+        // http://developer.bluetooth.org/gatt/characteristics/Pages/CharacteristicViewer.aspx?u=org.bluetooth.characteristic.heart_rate_measurement.xml
+
+            int flag = characteristic.getProperties();
+            int format = -1;
+            if ((flag & 0x01) != 0) {
+                format = BluetoothGattCharacteristic.FORMAT_UINT16;
+//                Log.d(TAG, "Heart rate format UINT16.");
+            } else {
+                format = BluetoothGattCharacteristic.FORMAT_UINT8;
+//                Log.d(TAG, "Heart rate format UINT8.");
+            }
+            final int pulse = characteristic.getIntValue(format, 1);
+        final int oxy = characteristic.getIntValue(format, 2);
+        if(pulse > 60 && oxy > 80) {
+            Log.d(TAG, String.format("Pulse %d", pulse));
+            Log.d(TAG, String.format("Oxy %d", oxy));
+        }
+//            intent.putExtra(EXTRA_DATA, String.valueOf(heartRate));
+//
+            // For all other profiles, writes the data formatted in HEX.
+            final byte[] data = characteristic.getValue();
+//            if (data != null && data.length > 0) {
+//                final StringBuilder stringBuilder = new StringBuilder(data.length);
+//                for(byte byteChar : data)
+//                    stringBuilder.append(String.format("%02X ", byteChar));
+////                intent.putExtra(EXTRA_DATA, new String(data) + "\n" + stringBuilder.toString());
+//                Toast.makeText(getApplicationContext(),""+stringBuilder.toString(),Toast.LENGTH_SHORT).show();
+////            }
+//characteristic.
+//        Log.d("PPPPP",characteristic.getValue().length+"");
+//        Toast.makeText(getApplicationContext(),"PULSE "+data[1]+" Oxy "+data[2],Toast.LENGTH_SHORT).show();
     }
 
     @Override
@@ -300,11 +341,32 @@ public class MainActivity extends AppCompatActivity {
             }
         });
     }
+    public void readCharacteristic(BluetoothGattCharacteristic characteristic) {
+        if (btAdapter == null || bluetoothGatt == null) {
+            Log.w(TAG, "BluetoothAdapter not initialized");
+            return;
+        }
+        bluetoothGatt.readCharacteristic(characteristic);
+    }
+    public void setCharacteristicNotification(BluetoothGattCharacteristic characteristic,
+                                              boolean enabled) {
+        if (btAdapter == null || bluetoothGatt == null) {
+            Log.w(TAG, "BluetoothAdapter not initialized");
+            return;
+        }
+        bluetoothGatt.setCharacteristicNotification(characteristic, enabled);
 
+        // This is specific to Heart Rate Measurement.
+            BluetoothGattDescriptor descriptor = characteristic.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"));
+            descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            bluetoothGatt.writeDescriptor(descriptor);
+
+    }
     public void connectToDeviceSelected() {
         peripheralTextView.append("Trying to connect to device at index: " + deviceIndexInput.getText() + "\n");
         int deviceSelected = Integer.parseInt(deviceIndexInput.getText().toString());
         bluetoothGatt = devicesDiscovered.get(deviceSelected).connectGatt(this, false, btleGattCallback);
+
     }
 
     public void disconnectDeviceSelected() {
@@ -316,32 +378,75 @@ public class MainActivity extends AppCompatActivity {
         if (gattServices == null) return;
 
         // Loops through available GATT Services.
+
         for (BluetoothGattService gattService : gattServices) {
 
             final String uuid = gattService.getUuid().toString();
-            System.out.println("Service discovered: " + uuid);
-            MainActivity.this.runOnUiThread(new Runnable() {
-                public void run() {
-                    peripheralTextView.append("Service disovered: "+uuid+"\n");
-                }
-            });
-            new ArrayList<HashMap<String, String>>();
-            List<BluetoothGattCharacteristic> gattCharacteristics =
-                    gattService.getCharacteristics();
-
-            // Loops through available Characteristics.
-            for (BluetoothGattCharacteristic gattCharacteristic :
-                    gattCharacteristics) {
-
-                final String charUuid = gattCharacteristic.getUuid().toString();
-                System.out.println("Characteristic discovered for service: " + charUuid);
+            if(uuid.equals(Constants.CUSTOM_SERVICE)){
+                System.out.println("Service discovered: " + uuid);
                 MainActivity.this.runOnUiThread(new Runnable() {
                     public void run() {
-                        peripheralTextView.append("Characteristic discovered for service: "+charUuid+"\n");
+                        peripheralTextView.append("Service disovered: "+uuid+"\n");
                     }
                 });
+                new ArrayList<HashMap<String, String>>();
+                List<BluetoothGattCharacteristic> gattCharacteristics =
+                        gattService.getCharacteristics();
+//            setCharacteristicNotification(
+//                    gattCharacteristics.get(0), true);
+//                readCharacteristic(gattCharacteristics.);
 
+                // Loops through available Characteristics.
+                for (BluetoothGattCharacteristic gattCharacteristic :
+                        gattCharacteristics) {
+                    final String charUuid = gattCharacteristic.getUuid().toString();
+                    if(charUuid.equals(Constants.CUSTOM_CHARECTERISTIC)){
+                        bluetoothGatt.readCharacteristic(gattCharacteristic);
+                        bluetoothGatt.setCharacteristicNotification(gattCharacteristic,true);
+                        System.out.println("Characteristic discovered for service: " + charUuid);
+                        MainActivity.this.runOnUiThread(new Runnable() {
+                            public void run() {
+                                peripheralTextView.append("Characteristic discovered for service: "+charUuid+"\n");
+                            }
+                        });
+
+
+                    }
+//                    System.out.println("Characteristic discovered for service: " + charUuid);
+//                    MainActivity.this.runOnUiThread(new Runnable() {
+//                        public void run() {
+//                            peripheralTextView.append("Characteristic discovered for service: "+charUuid+"\n");
+//                        }
+//                    });
+
+                }
             }
+
+//            System.out.println("Service discovered: " + uuid);
+//            MainActivity.this.runOnUiThread(new Runnable() {
+//                public void run() {
+//                    peripheralTextView.append("Service disovered: "+uuid+"\n");
+//                }
+//            });
+//            new ArrayList<HashMap<String, String>>();
+//            List<BluetoothGattCharacteristic> gattCharacteristics =
+//                    gattService.getCharacteristics();
+////            setCharacteristicNotification(
+////                    gattCharacteristics.get(0), true);
+////                readCharacteristic(gattCharacteristics.);
+//
+//            // Loops through available Characteristics.
+//            for (BluetoothGattCharacteristic gattCharacteristic :
+//                    gattCharacteristics) {
+//                final String charUuid = gattCharacteristic.getUuid().toString();
+//                System.out.println("Characteristic discovered for service: " + charUuid);
+//                MainActivity.this.runOnUiThread(new Runnable() {
+//                    public void run() {
+//                        peripheralTextView.append("Characteristic discovered for service: "+charUuid+"\n");
+//                    }
+//                });
+//
+//            }
         }
     }
 
